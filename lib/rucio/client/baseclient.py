@@ -736,13 +736,12 @@ class BaseClient:
         if not auth_url:
             return False
 
-        if not self.creds['oidc_auto']:
-            if self.creds['oidc_polling']:
-                result = self._handle_oidc_polling_flow(auth_url)
-            else:
-                result = self._handle_oidc_manual_code_flow(auth_url)
-        else:
+        if self.creds['oidc_auto']:
             result = self._handle_oidc_auto_flow(auth_url)
+        elif self.creds['oidc_polling']:
+            result = self._handle_oidc_polling_flow(auth_url)
+        else:
+            result = self._handle_oidc_manual_code_flow(auth_url)
 
         if not result:
             self.logger.error('Cannot retrieve authentication token!')
@@ -901,9 +900,7 @@ class BaseClient:
               + "we strongly discourage you from following this --oidc-auto approach.")
         print("-------------------------------------------------------------------------")
 
-        oidc_scope = str(self.creds['oidc_scope'])
         userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
-
         auth_res = self._send_request(auth_url, method=HTTPMethod.GET, get_token=True)
         login_url = auth_res.url
         result = self._send_request(login_url, method=HTTPMethod.POST, data=userpass)
@@ -914,19 +911,33 @@ class BaseClient:
             return None
 
         if result.url == auth_url:
-            form_data = {}
-            for scope_item in oidc_scope.split():
-                form_data["scope_" + scope_item] = scope_item
-            default_data = {"remember": "until-revoked",
-                            "user_oauth_approval": True,
-                            "authorize": "Authorize"}
-            form_data.update(default_data)
-            print('Automatically authorising request of the following info on behalf of user: %s', str(form_data))
-            self.logger.warning('Automatically authorising request of the following info on behalf of user: %s',
-                                str(form_data))
-            result = self._send_request(result.url, method=HTTPMethod.POST, data=form_data)
+            result = self._auto_authorize_oidc_scopes(result.url)
 
         return result
+
+    def _auto_authorize_oidc_scopes(self, url: str) -> Response:
+        """
+        Automatically authorize OIDC scope request on behalf of user.
+
+        Parameters
+        ----------
+        url :
+            Authorization form URL
+
+        Returns
+        -------
+        Response
+            Response from authorization request
+        """
+        form_data = {f"scope_{scope}": scope for scope in self.creds['oidc_scope'].split()}
+        form_data.update({
+            "remember": "until-revoked",
+            "user_oauth_approval": True,
+            "authorize": "Authorize"
+        })
+
+        self.logger.warning('Auto-authorizing scope request: %s', form_data)
+        return self._send_request(url, method=HTTPMethod.POST, data=form_data)
 
     def __get_token_x509(self) -> bool:
         """
