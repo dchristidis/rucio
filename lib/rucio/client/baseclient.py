@@ -702,23 +702,21 @@ class BaseClient:
                     'X-Rucio-Auth-Token' not in refresh_result.headers:
                 print("Rucio Server response does not contain the expected headers.")
                 return False
-            else:
-                new_token = refresh_result.headers['X-Rucio-Auth-Token']
-                new_exp_epoch = refresh_result.headers['X-Rucio-Auth-Token-Expires']
-                if new_token and new_exp_epoch:
-                    self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
-                    # save to the file
-                    self.auth_token = new_token
-                    self.token_exp_epoch = new_exp_epoch
-                    self.__write_token()
-                    self.headers['X-Rucio-Auth-Token'] = self.auth_token
-                    return True
-                self.logger.debug("No new token was received, possibly invalid/expired \
-                           \ntoken or a token with no refresh token in Rucio DB")
-                return False
+
+            new_token = refresh_result.headers['X-Rucio-Auth-Token']
+            new_exp_epoch = refresh_result.headers['X-Rucio-Auth-Token-Expires']
+            if new_token and new_exp_epoch:
+                self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
+                self.auth_token = new_token
+                self.token_exp_epoch = new_exp_epoch
+                self.__write_token()
+                self.headers['X-Rucio-Auth-Token'] = self.auth_token
+                return True
+
+            self.logger.debug("No new token was received, possibly invalid/expired token or no refresh token in Rucio DB")
+            return False
         else:
-            print("Rucio Client did not succeed to contact the \
-                   \nRucio Auth Server when attempting token refresh.")
+            self.logger.error("Rucio Client did not succeed to contact the Rucio Auth Server when attempting token refresh.")
             return False
 
     def __get_token_oidc(self) -> bool:
