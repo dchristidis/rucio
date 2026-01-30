@@ -590,7 +590,7 @@ class BaseClient:
             The reason to backoff which will be shown to the user
         """
         sleep_time = min(MAX_RETRY_BACK_OFF_SECONDS, 0.25 * 2 ** retry_number)
-        self.logger.warning("Waiting {}s due to reason: {} ".format(sleep_time, reason))
+        self.logger.warning("Waiting %ss due to reason: %s", sleep_time, reason)
         time.sleep(sleep_time)
 
     def _send_request(
@@ -665,7 +665,7 @@ class BaseClient:
             self.logger.debug("HTTP header:  %s: %s" % (h, v))
         if method != HTTPMethod.GET and data:
             text = self._reduce_data(data)
-            self.logger.debug("Request data (length=%d): [%s]" % (len(data), text))
+            self.logger.debug("Request data (length=%d): [%s]", len(data), text)
 
         result = None
         for retry in range(self.AUTH_RETRIES + 1):
@@ -679,15 +679,16 @@ class BaseClient:
                 elif method == HTTPMethod.DELETE:
                     result = self.session.delete(url, headers=hds, data=data, verify=verify, timeout=self.timeout)
                 else:
-                    self.logger.debug("Unknown request type %s. Request was not sent" % (method,))
-                    return None
-                self.logger.debug("HTTP Response: %s %s" % (result.status_code, result.reason))
+                    self.logger.debug("Unknown request type %s. Request was not sent" % (method))
+                    raise ServerConnectionException(f"Invalid HTTP method: {method}")
+
+                self.logger.debug("HTTP Response: %s %s", result.status_code, result.reason)
                 if result.status_code in STATUS_CODES_TO_RETRY:
                     self._back_off(retry, 'server returned {}'.format(result.status_code))
                     continue
                 if result.status_code // 100 != 2 and result.text:
                     # do not do this for successful requests because the caller may be expecting streamed response
-                    self.logger.debug("Response text (length=%d): [%s]" % (len(result.text), result.text))
+                    self.logger.debug("Response text (length=%d): [%s]", len(result.text), result.text)
             except ConnectionError as error:
                 self.logger.error('ConnectionError: ' + str(error))
                 if retry > self.request_retries:
@@ -698,7 +699,7 @@ class BaseClient:
                 # While in python3 we can directly catch 'BrokenPipeError', in python2 it doesn't exist.
                 if getattr(error, 'errno') != errno.EPIPE:
                     raise
-                self.logger.error('BrokenPipe: ' + str(error))
+                self.logger.error('BrokenPipe: %s', error)
                 if retry > self.request_retries:
                     raise
                 continue
@@ -777,7 +778,8 @@ class BaseClient:
             with open(self.token_exp_epoch_file, 'r') as token_epoch_file:
                 try:
                     self.token_exp_epoch = int(token_epoch_file.readline())
-                except Exception:
+                except (ValueError, TypeError) as error:
+                    self.logger.debug('Failed to parse token expiration: %s', error)
                     self.token_exp_epoch = None
 
         if self.token_exp_epoch is None:
@@ -793,14 +795,14 @@ class BaseClient:
         refresh_result = self._send_request(request_refresh_url, method=HTTPMethod.GET, get_token=True)
         if refresh_result.status_code == codes.ok:
             if HEADER_RUCIO_AUTH_TOKEN_EXPIRES not in refresh_result.headers or HEADER_RUCIO_AUTH_TOKEN not in refresh_result.headers:
-                print("Rucio Server response does not contain the expected headers.")
+                self.logger.error("Rucio Server response does not contain the expected headers.")
                 return False
 
             new_token = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN]
             new_exp_epoch = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN_EXPIRES]
 
             if new_token and new_exp_epoch:
-                self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
+                self.logger.debug("Saving token %s and expiration epoch %s to files", new_token, new_exp_epoch)
                 self.auth_token = new_token
                 self.token_exp_epoch = int(new_exp_epoch)
                 self.__write_token()
@@ -858,13 +860,12 @@ class BaseClient:
         headers = self._build_oidc_request_headers()
         request_auth_url = build_url(self.auth_host, path='auth/oidc')
 
-        self.logger.debug("Initial auth URL request headers %s to files" % str(headers))
+        self.logger.debug("Initial auth URL request headers %s", headers)
         oidc_auth_res = self._send_request(request_auth_url, headers=headers, get_token=True)
-        self.logger.debug("Response headers %s and text %s" % (str(oidc_auth_res.headers), str(oidc_auth_res.text)))
+        self.logger.debug("Response headers %s and text %s", oidc_auth_res.headers, oidc_auth_res.text)
 
         if HEADER_RUCIO_OIDC_AUTH_URL not in oidc_auth_res.headers:
-            print("Rucio Client did not succeed to get AuthN/Z URL from the Rucio Auth Server. \
-                                   \nThis could be due to wrongly requested/configured scope, audience or issuer.")
+            self.logger.error("Failed to get AuthN/Z URL from Rucio Auth Server. Check scope, audience, or issuer configuration.")
             return None
 
         return oidc_auth_res.headers[HEADER_RUCIO_OIDC_AUTH_URL]
@@ -906,11 +907,10 @@ class BaseClient:
         Optional[Response]
             Response containing auth token if successful, None otherwise
         """
-        print("\nPlease use your internet browser, go to:")
-        print("\n    " + auth_url + "    \n")
-        print("and authenticate with your Identity Provider.")
-        print("Rucio Client will poll the auth server for %d minutes.", OIDC_POLLING_TIMEOUT_SECONDS // 60)
-        print("----------------------------------------------")
+        self.logger.info("Please use your internet browser and go to:\n\n    %s\n", auth_url)
+        self.logger.info("and authenticate with your Identity Provider.")
+        self.logger.info("Rucio Client will poll the auth server for %d minutes.", OIDC_POLLING_TIMEOUT_SECONDS // 60)
+        self.logger.info("----------------------------------------------")
 
         headers = {'X-Rucio-Client-Fetch-Token': 'True'}
         start_time = time.time()
@@ -938,10 +938,9 @@ class BaseClient:
         Optional[Response]
             Response containing auth token if successful, None otherwise
         """
-        print("\nPlease use your internet browser, go to:")
-        print("\n    " + auth_url + "    \n")
-        print("and authenticate with your Identity Provider.")
-        print("Copy paste the code from the browser to the terminal and press enter:")
+        self.logger.info("Please use your internet browser and go to:\n\n    %s\n", auth_url)
+        self.logger.info("and authenticate with your Identity Provider.")
+        self.logger.info("Copy paste the code from the browser to the terminal and press enter:")
 
         headers = {'X-Rucio-Client-Fetch-Token': 'True'}
 
@@ -973,10 +972,10 @@ class BaseClient:
         Optional[Response]
             Response containing auth token if successful, None otherwise
         """
-        print("\nAccording to the OAuth2/OIDC standard you should NOT be sharing \n"
-              + "your password with any 3rd party application, therefore, \n"
-              + "we strongly discourage you from following this --oidc-auto approach.")
-        print("-------------------------------------------------------------------------")
+        self.logger.warning(
+            "Automatic OIDC authentication shares credentials with 3rd party. "
+            "This violates OAuth2/OIDC best practices and is strongly discouraged."
+        )
 
         userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
         auth_res = self._send_request(auth_url, get_token=True)
@@ -984,8 +983,7 @@ class BaseClient:
         result = self._send_request(auth_res.url, method=HTTPMethod.POST, data=userpass)
 
         if 'OAuth Error' in result.text:
-            self.logger.error('Identity Provider does not allow to proceed. Could be due \
-                       \nto misconfigured redirection server name of the Rucio OIDC Client.')
+            self.logger.error('Identity Provider rejected request. Check OIDC Client configuration.')
             return None
 
         if result.url == auth_url:
@@ -1044,8 +1042,9 @@ class BaseClient:
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
+
         if self.auth_oidc_refresh_active:
-            self.logger.debug("Resetting the token expiration epoch file content.")
+            self.logger.debug("Resetting token expiration epoch file.")
             self.token_exp_epoch = None
             file_d, file_n = mkstemp(dir=self.token_path)
             with fdopen(file_d, "w") as f_exp_epoch:
@@ -1075,11 +1074,11 @@ class BaseClient:
             url = build_url(self.auth_host, path='auth/x509_proxy')
             client_cert = self.creds['client_proxy']
 
-        if (client_cert is not None) and not (os.path.exists(client_cert)):
-            self.logger.error('given client cert (%s) doesn\'t exist' % client_cert)
+        if client_cert is not None and not os.path.exists(client_cert):
+            self.logger.error("Given client cert (%s) doesn't exist", client_cert)
             return False
         if client_key is not None and not os.path.exists(client_key):
-            self.logger.error('given client key (%s) doesn\'t exist' % client_key)
+            self.logger.error("Given client key (%s) doesn't exist", client_key)
 
         if client_key is None:
             cert = client_cert
@@ -1116,11 +1115,9 @@ class BaseClient:
         """
         headers: dict[str, str] = {}
         private_key_path = self.creds['ssh_private_key']
+
         if not os.path.exists(private_key_path):
-            self.logger.error('given private key (%s) doesn\'t exist' % private_key_path)
-            return False
-        if private_key_path is not None and not os.path.exists(private_key_path):
-            self.logger.error('given private key (%s) doesn\'t exist' % private_key_path)
+            self.logger.error("Given private key (%s) doesn't exist", private_key_path)
             return False
 
         url = build_url(self.auth_host, path='auth/ssh_challenge_token')
@@ -1128,7 +1125,7 @@ class BaseClient:
         result = self._send_request(url, method=HTTPMethod.GET, get_token=True)
 
         if not result:
-            self.logger.error('cannot get ssh_challenge_token')
+            self.logger.error('Cannot get ssh_challenge_token')
             return False
 
         if result.status_code != codes.ok:
@@ -1140,7 +1137,7 @@ class BaseClient:
             raise exc_cls(exc_msg)
 
         self.ssh_challenge_token = result.headers['x-rucio-ssh-challenge-token']
-        self.logger.debug('got new ssh challenge token \'%s\'' % self.ssh_challenge_token)
+        self.logger.debug("Got new ssh challenge token '%s'", self.ssh_challenge_token)
 
         # sign the challenge token with the private key
         with open(private_key_path, 'r') as fd_private_key_path:
@@ -1235,8 +1232,8 @@ class BaseClient:
 
     def __get_token(self) -> None:
         """Get auth token based on configured authentication type."""
+        self.logger.debug('Getting a new token')
 
-        self.logger.debug('get a new token')
         for retry in range(self.AUTH_RETRIES + 1):
             if self.auth_type == 'userpass':
                 if not self.__get_token_userpass():
@@ -1297,12 +1294,12 @@ class BaseClient:
                 self.auth_token = token_file_handler.readline()
             self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
         except OSError as error:
-            print("I/O error({0}): {1}".format(error.errno, error.strerror))
-        except Exception:
+            self.logger.error("I/O error(%s): %s", error.errno, error.strerror)
             raise
         if self.auth_oidc_refresh_active and self.auth_type == 'oidc':
             self.__refresh_token_oidc()
-        self.logger.debug('got token from file')
+
+        self.logger.debug('Got token from file')
         return True
 
     def __write_token(self) -> None:
@@ -1330,8 +1327,7 @@ class BaseClient:
                     f_exp_epoch.write(str(self.token_exp_epoch))
                 move(file_n, self.token_exp_epoch_file)
         except OSError as error:
-            print("I/O error({0}): {1}".format(error.errno, error.strerror))
-        except Exception:
+            self.logger.error("I/O error(%s): %s", error.errno, error.strerror)
             raise
 
     def __authenticate(self) -> None:
