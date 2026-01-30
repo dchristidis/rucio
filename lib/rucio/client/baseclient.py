@@ -349,20 +349,18 @@ class BaseClient:
     def _get_auth_tokens(self) -> tuple[Optional[str], str, str, str]:
         # if token file path is defined in the rucio.cfg file, use that file. Currently this prevents authenticating as another user or VO.
         auth_token_file_path = config_get('client', 'auth_token_file_path', False, None)
-        token_filename_suffix = "for_default_account" if self.account is None else "for_account_" + self.account
+        token_filename_suffix = "for_default_account" if self.account is None else f"for_account_{self.account}"
 
         if auth_token_file_path:
-            token_file = auth_token_file_path
-            token_path = '/'.join(auth_token_file_path.split('/')[:-1])
-
+            token_file = _expand_path(auth_token_file_path)
+            token_path = '/'.join(token_file.split('/')[:-1])
         else:
-            token_path = self.TOKEN_PATH_PREFIX + getpass.getuser()
+            token_path = _expand_path(self.TOKEN_PATH_PREFIX + getpass.getuser())
             if self.vo != DEFAULT_VO:
-                token_path += '@%s' % self.vo
+                token_path += f'@{self.vo}'
+            token_file = f'{token_path}/{self.TOKEN_PREFIX}{token_filename_suffix}'
 
-            token_file = token_path + '/' + self.TOKEN_PREFIX + token_filename_suffix
-
-        token_exp_epoch_file = token_path + '/' + self.TOKEN_EXP_PREFIX + token_filename_suffix
+        token_exp_epoch_file = f'{token_path}/{self.TOKEN_EXP_PREFIX}{token_filename_suffix}'
         return auth_token_file_path, token_exp_epoch_file, token_file, token_path
 
     def _get_auth_type(self, auth_type: Optional[str]) -> str:
