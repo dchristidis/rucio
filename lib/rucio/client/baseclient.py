@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlparse
 
 import requests
-from dogpile.cache import make_region
+from dogpile.cache.region import make_region
 from requests import Response, Session
 from requests.exceptions import ConnectionError
 from requests.status_codes import codes
@@ -359,7 +359,7 @@ class BaseClient:
         """
         try:
             self.request_retries = config_get_int('client', 'request_retries')
-        except (NoOptionError, ConfigNotFound):
+        except (NoOptionError, NoSectionError, ConfigNotFound):
             self.logger.debug('request_retries not specified in config file. Taking default.')
         except ValueError:
             self.logger.debug('request_retries must be an integer. Taking default.')
@@ -434,7 +434,7 @@ class BaseClient:
                 creds['oidc_username'] = config_get('client', 'oidc_username', False, None)
             if 'oidc_password' not in creds or creds['oidc_password'] is None:
                 creds['oidc_password'] = config_get('client', 'oidc_password', False, None)
-        if 'oidc_scope' not in creds or creds['oidc_scope'] == 'openid profile':
+        if 'oidc_scope' not in creds or creds['oidc_scope'] is None or creds['oidc_scope'] == 'openid profile':
             creds['oidc_scope'] = config_get('client', 'oidc_scope', False, 'openid profile')
         if 'oidc_polling' not in creds or creds['oidc_polling'] is False:
             creds['oidc_polling'] = config_get_bool('client', 'oidc_polling', False, False)
@@ -536,6 +536,7 @@ class BaseClient:
             exc_cls = data['ExceptionClass']
         elif 'ExceptionClass' in headers:
             exc_cls = headers['ExceptionClass']
+
         if 'ExceptionMessage' in data:
             exc_msg = data['ExceptionMessage']
         elif 'ExceptionMessage' in headers:
@@ -565,7 +566,7 @@ class BaseClient:
                     yield parse_response(line)
         elif 'content-type' in response.headers and response.headers['content-type'] == 'application/json':
             yield parse_response(response.text)
-        else:  # Exception ?
+        else:
             if response.text:
                 yield response.text
 
@@ -656,7 +657,7 @@ class BaseClient:
         if headers is not None:
             hds.update(headers)
         if verify is None:
-            verify = self.ca_cert or False  # Maybe unnecessary but make sure to convert "" -> False
+            verify = self.ca_cert or False
 
         self.logger.debug("HTTP request: %s %s" % (method.value, url))
         for h, v in hds.items():
@@ -687,7 +688,6 @@ class BaseClient:
                     self._back_off(retry, f'server returned {result.status_code}')
                     continue
                 if result.status_code // 100 != 2 and result.text:
-                    # do not do this for successful requests because the caller may be expecting streamed response
                     self.logger.debug("Response text (length=%d): [%s]", len(result.text), result.text)
             except ConnectionError as error:
                 self.logger.error('ConnectionError: %s', error)
@@ -695,8 +695,6 @@ class BaseClient:
                     raise
                 continue
             except OSError as error:
-                # Handle Broken Pipe
-                # While in python3 we can directly catch 'BrokenPipeError', in python2 it doesn't exist.
                 if getattr(error, 'errno') != errno.EPIPE:
                     raise
                 self.logger.error('BrokenPipe: %s', error)
@@ -704,7 +702,7 @@ class BaseClient:
                     raise
                 continue
 
-            if result is not None and result.status_code == codes.unauthorized and not get_token:  # pylint: disable-msg=E1101
+            if result is not None and result.status_code == codes.unauthorized and not get_token:
                 self.session = Session()
                 self.__get_token()
                 hds[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
@@ -739,7 +737,6 @@ class BaseClient:
         result = self._send_request(url, method=HTTPMethod.GET, headers=headers, get_token=True)
 
         if not result:
-            # result is either None or not OK.
             if isinstance(result, Response):
                 if 'ExceptionClass' in result.headers and result.headers['ExceptionClass']:
                     exc_msg = result.headers.get('ExceptionMessage', result.headers['ExceptionClass'])
@@ -781,10 +778,8 @@ class BaseClient:
                     self.token_exp_epoch = None
 
         if self.token_exp_epoch is None:
-            # check expiration time for a new token
             pass
         elif time.time() > self.token_exp_epoch - self.auth_oidc_refresh_before_exp * 60 and time.time() < self.token_exp_epoch:
-            # attempt to refresh token
             pass
         else:
             return False
@@ -1063,6 +1058,7 @@ class BaseClient:
         """
         client_cert = None
         client_key = None
+
         if self.auth_type == 'x509':
             url = build_url(self.auth_host, path='auth/x509')
             client_cert = self.creds['client_cert']
@@ -1077,16 +1073,11 @@ class BaseClient:
             return False
         if client_key is not None and not os.path.exists(client_key):
             self.logger.error("Given client key (%s) doesn't exist", client_key)
+            return False
 
-        if client_key is None:
-            cert = client_cert
-        else:
-            cert = (client_cert, client_key)
-
+        cert = client_cert if client_key is None else (client_cert, client_key)
         result = self._send_request(url, method=HTTPMethod.GET, get_token=True, cert=cert)
 
-        # Note a response object for a failed request evaluates to false, so we cannot
-        # use "not result" here
         if result is None:
             self.logger.error('Internal error: Request for authentication token returned no result!')
             return False
@@ -1137,7 +1128,6 @@ class BaseClient:
         self.ssh_challenge_token = result.headers['x-rucio-ssh-challenge-token']
         self.logger.debug("Got new ssh challenge token '%s'", self.ssh_challenge_token)
 
-        # sign the challenge token with the private key
         with open(private_key_path, 'r') as fd_private_key_path:
             private_key = fd_private_key_path.read()
             signature = ssh_sign(private_key, self.ssh_challenge_token)
@@ -1205,12 +1195,13 @@ class BaseClient:
         userpass = {'username': self.creds['username'], 'password': self.creds['password']}
         url = build_url(self.auth_host, path='auth/saml')
 
-        result = None
         saml_auth_result = self._send_request(url, method=HTTPMethod.GET, get_token=True)
         if saml_auth_result.headers.get('X-Rucio-Auth-Token'):
             self.auth_token = saml_auth_result.headers['X-Rucio-Auth-Token']
+            return True
+
         saml_auth_url = saml_auth_result.headers['X-Rucio-SAML-Auth-URL']
-        result = self._send_request(saml_auth_url, method=HTTPMethod.POST, data=userpass, verify=False)
+        self._send_request(saml_auth_url, method=HTTPMethod.POST, data=userpass, verify=False)
         result = self._send_request(url, method=HTTPMethod.GET, get_token=True)
 
         if not result:
@@ -1258,7 +1249,7 @@ class BaseClient:
                         f'saml authentication failed for account={self.account} with identity={self.creds["username"]}'
                     )
             else:
-                raise CannotAuthenticate('auth type \'%s\' not supported' % self.auth_type)
+                raise CannotAuthenticate(f'auth type \'{self.auth_type}\' not supported')
 
             if self.auth_token is not None:
                 self.__write_token()
@@ -1294,6 +1285,7 @@ class BaseClient:
         except OSError as error:
             self.logger.error("I/O error(%s): %s", error.errno, error.strerror)
             raise
+
         if self.auth_oidc_refresh_active and self.auth_type == 'oidc':
             self.__refresh_token_oidc()
 
@@ -1302,16 +1294,14 @@ class BaseClient:
 
     def __write_token(self) -> None:
         """Write current auth_token to local token file."""
-        # check if rucio temp directory is there. If not create it with permissions only for the current user
         if not os.path.isdir(self.token_path):
+            self.logger.debug("Rucio token folder '%s' not found. Creating it.", self.token_path)
             try:
-                self.logger.debug('rucio token folder \'%s\' not found. Create it.' % self.token_path)
-                try:
-                    makedirs(self.token_path, 0o700)
-                except FileExistsError:
-                    msg = f'Token directory already exists at {self.token_path} - skipping'
-                    self.logger.debug(msg)
-            except Exception:
+                makedirs(self.token_path, 0o700)
+            except FileExistsError:
+                self.logger.debug('Token directory already exists at %s - skipping', self.token_path)
+            except OSError as error:
+                self.logger.error("Failed to create token directory: %s", error)
                 raise
 
         try:
@@ -1319,6 +1309,7 @@ class BaseClient:
             with fdopen(file_d, "w") as f_token:
                 f_token.write(self.auth_token)
             move(file_n, self.token_file)
+
             if self.auth_type == 'oidc' and self.token_exp_epoch and self.auth_oidc_refresh_active:
                 file_d, file_n = mkstemp(dir=self.token_path)
                 with fdopen(file_d, "w") as f_exp_epoch:
