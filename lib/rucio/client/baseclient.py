@@ -733,22 +733,15 @@ class BaseClient:
         :returns: True if the token was successfully received. False otherwise.
         """
         oidc_scope = str(self.creds['oidc_scope'])
-        headers = self._build_oidc_request_headers()
+        headers = {}
         if self.creds['oidc_auto']:
             userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
 
         result = None
-        request_auth_url = build_url(self.auth_host, path='auth/oidc')
-        # requesting authorization URL specific to the user & Rucio OIDC Client
-        self.logger.debug("Initial auth URL request headers %s to files" % str(headers))
-        oidc_auth_res = self._send_request(request_auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
-        self.logger.debug("Response headers %s and text %s" % (str(oidc_auth_res.headers), str(oidc_auth_res.text)))
-        # with the obtained authorization URL we will contact the Identity Provider to get to the login page
-        if 'X-Rucio-OIDC-Auth-URL' not in oidc_auth_res.headers:
-            print("Rucio Client did not succeed to get AuthN/Z URL from the Rucio Auth Server. \
-                                   \nThis could be due to wrongly requested/configured scope, audience or issuer.")
+        auth_url = self._request_oidc_auth_url()
+        if not auth_url:
             return False
-        auth_url = oidc_auth_res.headers['X-Rucio-OIDC-Auth-URL']
+
         if not self.creds['oidc_auto']:
             print("\nPlease use your internet browser, go to:")
             print("\n    " + auth_url + "    \n")
@@ -835,6 +828,29 @@ class BaseClient:
             move(file_n, self.token_exp_epoch_file)
             self.__refresh_token_oidc()
         return True
+
+    def _request_oidc_auth_url(self) -> Optional[str]:
+        """
+        Request authorization URL from Rucio authentication server.
+
+        Returns
+        -------
+        Optional[str]
+            Authorization URL from identity provider, or None if request failed
+        """
+        headers = self._build_oidc_request_headers()
+        request_auth_url = build_url(self.auth_host, path='auth/oidc')
+
+        self.logger.debug("Initial auth URL request headers %s to files" % str(headers))
+        oidc_auth_res = self._send_request(request_auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+        self.logger.debug("Response headers %s and text %s" % (str(oidc_auth_res.headers), str(oidc_auth_res.text)))
+
+        if 'X-Rucio-OIDC-Auth-URL' not in oidc_auth_res.headers:
+            print("Rucio Client did not succeed to get AuthN/Z URL from the Rucio Auth Server. \
+                                   \nThis could be due to wrongly requested/configured scope, audience or issuer.")
+            return None
+
+        return oidc_auth_res.headers['X-Rucio-OIDC-Auth-URL']
 
     def _build_oidc_request_headers(self) -> dict[str, str]:
         """
