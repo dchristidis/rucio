@@ -387,13 +387,13 @@ class BaseClient:
             self.logger.debug('No auth_type passed. Trying to get it from the environment variable RUCIO_AUTH_TYPE and config file.')
             if 'RUCIO_AUTH_TYPE' in environ:
                 if environ['RUCIO_AUTH_TYPE'] not in ['userpass', 'x509', 'x509_proxy', 'gss', 'ssh', 'saml', 'oidc']:
-                    raise MissingClientParameter('Possible RUCIO_AUTH_TYPE values: userpass, x509, x509_proxy, gss, ssh, saml, oidc, vs. ' + environ['RUCIO_AUTH_TYPE'])
+                    raise MissingClientParameter(f"Possible RUCIO_AUTH_TYPE values: userpass, x509, x509_proxy, gss, ssh, saml, oidc, vs. {environ['RUCIO_AUTH_TYPE']}")
                 auth_type = environ['RUCIO_AUTH_TYPE']
             else:
                 try:
                     auth_type = config_get('client', 'auth_type')
                 except (NoOptionError, NoSectionError) as error:
-                    raise MissingClientParameter('Option \'%s\' cannot be found in config file' % error.args[0])
+                    raise MissingClientParameter(f"Option '{error.args[0]}' cannot be found in config file")
         return auth_type
 
     def _get_creds(self, creds: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -415,7 +415,7 @@ class BaseClient:
                 self._populate_ssh_creds(creds)
         except (NoOptionError, NoSectionError) as error:
             if error.args[0] != 'client_key':
-                raise MissingClientParameter('Option \'%s\' cannot be found in config file' % error.args[0])
+                raise MissingClientParameter(f"Option '{error.args[0]}' cannot be found in config file")
 
         return creds
 
@@ -530,7 +530,8 @@ class BaseClient:
             data = {}
 
         exc_cls = 'RucioException'
-        exc_msg = 'no error information passed (http status code: %s)' % status_code
+        exc_msg = f'no error information passed (http status code: {status_code})'
+
         if 'ExceptionClass' in data:
             exc_cls = data['ExceptionClass']
         elif 'ExceptionClass' in headers:
@@ -542,8 +543,7 @@ class BaseClient:
 
         if hasattr(exception, exc_cls):
             return getattr(exception, exc_cls), exc_msg
-        else:
-            return exception.RucioException, "%s: %s" % (exc_cls, exc_msg)
+        return exception.RucioException, f"{exc_cls}: {exc_msg}"
 
     def _load_json_data(self, response: requests.Response) -> 'Generator[Any, Any, Any]':
         """
@@ -575,7 +575,7 @@ class BaseClient:
             data = json.dumps(data)
         text = data if isinstance(data, str) else data.decode("utf-8")
         if len(text) > maxlen:
-            text = "%s ... %s" % (text[:maxlen - 15], text[-10:])
+            text = f"{text[:maxlen - 15]} ... {text[-10:]}"
         return text
 
     def _back_off(self, retry_number: int, reason: str) -> None:
@@ -684,13 +684,13 @@ class BaseClient:
 
                 self.logger.debug("HTTP Response: %s %s", result.status_code, result.reason)
                 if result.status_code in STATUS_CODES_TO_RETRY:
-                    self._back_off(retry, 'server returned {}'.format(result.status_code))
+                    self._back_off(retry, f'server returned {result.status_code}')
                     continue
                 if result.status_code // 100 != 2 and result.text:
                     # do not do this for successful requests because the caller may be expecting streamed response
                     self.logger.debug("Response text (length=%d): [%s]", len(result.text), result.text)
             except ConnectionError as error:
-                self.logger.error('ConnectionError: ' + str(error))
+                self.logger.error('ConnectionError: %s', error)
                 if retry > self.request_retries:
                     raise
                 continue
@@ -742,10 +742,8 @@ class BaseClient:
             # result is either None or not OK.
             if isinstance(result, Response):
                 if 'ExceptionClass' in result.headers and result.headers['ExceptionClass']:
-                    if 'ExceptionMessage' in result.headers and result.headers['ExceptionMessage']:
-                        raise CannotAuthenticate('%s: %s' % (result.headers['ExceptionClass'], result.headers['ExceptionMessage']))
-                    else:
-                        raise CannotAuthenticate(result.headers["ExceptionClass"])
+                    exc_msg = result.headers.get('ExceptionMessage', result.headers['ExceptionClass'])
+                    raise CannotAuthenticate(f"{result.headers['ExceptionClass']}: {exc_msg}")
                 elif result.text:
                     raise CannotAuthenticate(result.text)
             self.logger.error('Cannot retrieve authentication token!')
@@ -1237,28 +1235,28 @@ class BaseClient:
         for retry in range(self.AUTH_RETRIES + 1):
             if self.auth_type == 'userpass':
                 if not self.__get_token_userpass():
-                    raise CannotAuthenticate('userpass authentication failed for account=%s with identity=%s' % (self.account,
-                                                                                                                 self.creds['username']))
-            elif self.auth_type == 'x509' or self.auth_type == 'x509_proxy':
+                    raise CannotAuthenticate(
+                        f'userpass authentication failed for account={self.account} with identity={self.creds["username"]}'
+                    )
+            elif self.auth_type in ('x509', 'x509_proxy'):
                 if not self.__get_token_x509():
-                    raise CannotAuthenticate('x509 authentication failed for account=%s with identity=%s' % (self.account,
-                                                                                                             self.creds))
+                    raise CannotAuthenticate(f'x509 authentication failed for account={self.account} with identity={self.creds}')
             elif self.auth_type == 'oidc':
                 if not self.__get_token_oidc():
-                    raise CannotAuthenticate('OIDC authentication failed for account=%s' % self.account)
-
+                    raise CannotAuthenticate(f'OIDC authentication failed for account={self.account}')
             elif self.auth_type == 'gss':
                 if not self.__get_token_gss():
-                    raise CannotAuthenticate('kerberos authentication failed for account=%s with identity=%s' % (self.account,
-                                                                                                                 self.creds))
+                    raise CannotAuthenticate(
+                        f'kerberos authentication failed for account={self.account} with identity={self.creds}'
+                    )
             elif self.auth_type == 'ssh':
                 if not self.__get_token_ssh():
-                    raise CannotAuthenticate('ssh authentication failed for account=%s with identity=%s' % (self.account,
-                                                                                                            self.creds))
+                    raise CannotAuthenticate(f'ssh authentication failed for account={self.account} with identity={self.creds}')
             elif self.auth_type == 'saml':
                 if not self.__get_token_saml():
-                    raise CannotAuthenticate('saml authentication failed for account=%s with identity=%s' % (self.account,
-                                                                                                             self.creds))
+                    raise CannotAuthenticate(
+                        f'saml authentication failed for account={self.account} with identity={self.creds["username"]}'
+                    )
             else:
                 raise CannotAuthenticate('auth type \'%s\' not supported' % self.auth_type)
 
@@ -1364,7 +1362,7 @@ class BaseClient:
             if self.creds['username'] is None or self.creds['password'] is None:
                 raise NoAuthInformation('No SAML username or password passed')
         else:
-            raise CannotAuthenticate('auth type \'%s\' not supported' % self.auth_type)
+            raise CannotAuthenticate(f'auth type \'{self.auth_type}\' not supported')
 
         if not self.__read_token():
             self.__get_token()
