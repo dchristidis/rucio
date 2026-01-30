@@ -758,7 +758,7 @@ class BaseClient:
         request_auth_url = build_url(self.auth_host, path='auth/oidc')
 
         self.logger.debug("Initial auth URL request headers %s to files" % str(headers))
-        oidc_auth_res = self._send_request(request_auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+        oidc_auth_res = self._send_request(request_auth_url, headers=headers, get_token=True)
         self.logger.debug("Response headers %s and text %s" % (str(oidc_auth_res.headers), str(oidc_auth_res.text)))
 
         if 'X-Rucio-OIDC-Auth-URL' not in oidc_auth_res.headers:
@@ -803,25 +803,24 @@ class BaseClient:
         Optional[Response]
             Response containing auth token if successful, None otherwise
         """
+        timeout = 180
         print("\nPlease use your internet browser, go to:")
         print("\n    " + auth_url + "    \n")
         print("and authenticate with your Identity Provider.")
-
-        headers = {'X-Rucio-Client-Fetch-Token': 'True'}
-        timeout = 180
-        start = time.time()
-
-        print("In the next 3 minutes, Rucio Client will be polling \
-                                   \nthe Rucio authentication server for a token.")
+        print("Rucio Client will poll the auth server for %d minutes.", timeout // 60)
         print("----------------------------------------------")
 
-        while time.time() - start < timeout:
-            result = self._send_request(auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+        headers = {'X-Rucio-Client-Fetch-Token': 'True'}
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            result = self._send_request(auth_url, headers=headers, get_token=True)
             if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
-                break
+                return result
             time.sleep(2)
 
-        return result
+        self.logger.error("OIDC polling timeout after %d seconds", timeout)
+        return None
 
     def _handle_oidc_manual_code_flow(self, auth_url: str) -> Optional[Response]:
         """
@@ -840,25 +839,24 @@ class BaseClient:
         print("\nPlease use your internet browser, go to:")
         print("\n    " + auth_url + "    \n")
         print("and authenticate with your Identity Provider.")
+        print("Copy paste the code from the browser to the terminal and press enter:")
 
         headers = {'X-Rucio-Client-Fetch-Token': 'True'}
 
-        print("Copy paste the code from the browser to the terminal and press enter:")
-
-        count = 0
-        while count < 3:
+        max_attempts = 3
+        for attempt in range(max_attempts):
             fetchcode = input()
             fetch_url = build_url(self.auth_host, path='auth/oidc_redirect', params=fetchcode)
-            result = self._send_request(fetch_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+            result = self._send_request(fetch_url, headers=headers, get_token=True)
 
             if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
-                break
-            else:
-                print("The Rucio Auth Server did not respond as expected. Please, "
-                      + "try again and make sure you typed the correct code.")
-                count += 1
+                return result
 
-        return result
+            if attempt < max_attempts - 1:
+                self.logger.warning("Auth server did not respond as expected. Please try again with the correct code.")
+
+        self.logger.error("Failed to authenticate after %d attempts", max_attempts)
+        return None
 
     def _handle_oidc_auto_flow(self, auth_url: str) -> Optional[Response]:
         """
@@ -880,9 +878,9 @@ class BaseClient:
         print("-------------------------------------------------------------------------")
 
         userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
-        auth_res = self._send_request(auth_url, method=HTTPMethod.GET, get_token=True)
-        login_url = auth_res.url
-        result = self._send_request(login_url, method=HTTPMethod.POST, data=userpass)
+        auth_res = self._send_request(auth_url, get_token=True)
+
+        result = self._send_request(auth_res.url, method=HTTPMethod.POST, data=userpass)
 
         if 'OAuth Error' in result.text:
             self.logger.error('Identity Provider does not allow to proceed. Could be due \
