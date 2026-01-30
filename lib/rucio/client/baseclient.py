@@ -733,14 +733,7 @@ class BaseClient:
         :returns: True if the token was successfully received. False otherwise.
         """
         oidc_scope = str(self.creds['oidc_scope'])
-        headers = {'X-Rucio-Client-Authorize-Auto': str(self.creds['oidc_auto']),
-                   'X-Rucio-Client-Authorize-Polling': str(self.creds['oidc_polling']),
-                   'X-Rucio-Client-Authorize-Scope': str(self.creds['oidc_scope']),
-                   'X-Rucio-Client-Authorize-Refresh-Lifetime': str(self.creds['oidc_refresh_lifetime'])}
-        if self.creds['oidc_audience']:
-            headers['X-Rucio-Client-Authorize-Audience'] = str(self.creds['oidc_audience'])
-        if self.creds['oidc_issuer']:
-            headers['X-Rucio-Client-Authorize-Issuer'] = str(self.creds['oidc_issuer'])
+        headers = self._build_oidc_request_headers()
         if self.creds['oidc_auto']:
             userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
 
@@ -842,6 +835,27 @@ class BaseClient:
             move(file_n, self.token_exp_epoch_file)
             self.__refresh_token_oidc()
         return True
+
+    def _build_oidc_request_headers(self) -> dict[str, str]:
+        """
+        Build HTTP headers for OIDC authentication request.
+
+        Returns
+        -------
+        dict
+            Dictionary of HTTP headers for OIDC request
+        """
+        headers = {'X-Rucio-Client-Authorize-Auto': str(self.creds['oidc_auto']),
+                   'X-Rucio-Client-Authorize-Polling': str(self.creds['oidc_polling']),
+                   'X-Rucio-Client-Authorize-Scope': str(self.creds['oidc_scope']),
+                   'X-Rucio-Client-Authorize-Refresh-Lifetime': str(self.creds['oidc_refresh_lifetime'])}
+
+        if self.creds['oidc_audience']:
+            headers['X-Rucio-Client-Authorize-Audience'] = str(self.creds['oidc_audience'])
+        if self.creds['oidc_issuer']:
+            headers['X-Rucio-Client-Authorize-Issuer'] = str(self.creds['oidc_issuer'])
+
+        return headers
 
     def __get_token_x509(self) -> bool:
         """
