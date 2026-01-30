@@ -167,10 +167,11 @@ class BaseClient:
             Base user agent string (e.g. 'rucio-clients')
         """
         self.session = Session()
-        self.user_agent = "%s/%s" % (user_agent, version.version_string())  # e.g. "rucio-clients/0.2.13"
-        sys.argv[0] = sys.argv[0].split('/')[-1]
-        self.script_id = '::'.join(sys.argv[0:2])
-        if self.script_id == '':  # Python interpreter used
+        self.user_agent = f"{user_agent}/{version.version_string()}"
+        if sys.argv:
+            sys.argv[0] = sys.argv[0].split('/')[-1]
+            self.script_id = '::'.join(sys.argv[0:2]) or 'python'
+        else:
             self.script_id = 'python'
 
     def _configure_hosts(self, rucio_host: Optional[str], auth_host: Optional[str]) -> None:
@@ -194,26 +195,16 @@ class BaseClient:
             If required host configuration cannot be found
         """
         try:
-            if rucio_host is not None:
-                self.host = rucio_host
-            else:
-                self.host = config_get('client', 'rucio_host')
+            self.host = rucio_host or config_get('client', 'rucio_host')
         except (NoOptionError, NoSectionError) as error:
-            raise MissingClientParameter('Section client and Option \'%s\' cannot be found in config file' % error.args[0])
-
+            raise MissingClientParameter(f"Section client and Option '{error.args[0]}' cannot be found in config file")
         try:
-            if auth_host is not None:
-                self.auth_host = auth_host
-            else:
-                self.auth_host = config_get('client', 'auth_host')
+            self.auth_host = auth_host or config_get('client', 'auth_host')
         except (NoOptionError, NoSectionError) as error:
-            raise MissingClientParameter('Section client and Option \'%s\' cannot be found in config file' % error.args[0])
-
-        try:
-            self.trace_host = config_get('trace', 'trace_host')
-        except (NoOptionError, NoSectionError, ConfigNotFound):
-            self.trace_host = self.host
-            self.logger.debug('No trace_host passed. Using rucio_host instead')
+            raise MissingClientParameter(f"Section client and Option '{error.args[0]}' cannot be found in config file")
+        self.trace_host = config_get('trace', 'trace_host', raise_exception=False, default=self.host)
+        if self.trace_host == self.host:
+            self.logger.debug('No trace_host configured. Using rucio_host instead')
 
         self.list_hosts = [self.host]
 
@@ -234,33 +225,22 @@ class BaseClient:
         vo :
             Virtual Organization name
         """
-        self.account = account
-        if account is None:
-            self.logger.debug('No account passed. Trying to get it from the RUCIO_ACCOUNT environment variable or the config file.')
-            try:
-                self.account = environ['RUCIO_ACCOUNT']
-            except KeyError:
-                try:
-                    self.account = config_get('client', 'account')
-                except (NoOptionError, NoSectionError):
-                    pass
+        self.account = (
+            account
+            or environ.get('RUCIO_ACCOUNT')
+            or config_get('client', 'account', raise_exception=False, default=None)
+        )
 
         if vo is not None:
             self.vo = vo
         else:
-            self.logger.debug('No VO passed. Trying to get it from environment variable RUCIO_VO.')
-            try:
-                self.vo = environ['RUCIO_VO']
-            except KeyError:
-                self.logger.debug('No VO found. Trying to get it from the config file.')
-                try:
-                    self.vo = config_get('client', 'vo')
-                except (NoOptionError, NoSectionError):
-                    self.logger.debug('No VO found. Using default VO.')
-                    self.vo = DEFAULT_VO
-                except ConfigNotFound:
-                    self.logger.debug('No configuration found. Using default VO.')
-                    self.vo = DEFAULT_VO
+            self.vo = (
+                environ.get('RUCIO_VO')
+                or config_get('client', 'vo', raise_exception=False, default=None)
+                or DEFAULT_VO
+            )
+            if self.vo == DEFAULT_VO:
+                self.logger.debug('No VO found. Using default VO.')
 
     def _setup_oidc_config(self) -> None:
         """
