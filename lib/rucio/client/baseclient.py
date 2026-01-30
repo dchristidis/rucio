@@ -60,8 +60,24 @@ REGION = make_region(function_key_generator=my_key_generator).configure(
     expiration_time=60,
 )
 
+# HTTP status codes
 STATUS_CODES_TO_RETRY = [502, 503, 504]
 MAX_RETRY_BACK_OFF_SECONDS = 10
+
+# OIDC authentication constants
+OIDC_POLLING_TIMEOUT_SECONDS = 180  # 3 minutes
+OIDC_MAX_CODE_ATTEMPTS = 3
+OIDC_POLLING_INTERVAL_SECONDS = 2
+
+# HTTP header constants
+HEADER_RUCIO_AUTH_TOKEN = 'X-Rucio-Auth-Token'
+HEADER_RUCIO_AUTH_TOKEN_EXPIRES = 'X-Rucio-Auth-Token-Expires'
+HEADER_RUCIO_OIDC_AUTH_URL = 'X-Rucio-OIDC-Auth-URL'
+HEADER_RUCIO_VO = 'X-Rucio-VO'
+HEADER_RUCIO_ACCOUNT = 'X-Rucio-Account'
+HEADER_RUCIO_SCRIPT = 'X-Rucio-Script'
+HEADER_USER_AGENT = 'User-Agent'
+HEADER_CONNECTION = 'Connection'
 
 
 @REGION.cache_on_arguments(namespace='host_to_choose')
@@ -563,12 +579,16 @@ class BaseClient:
                        certificate, or a string, in which case it must be a path to a CA bundle to use.
         :return: the HTTP return body.
         """
-        hds = {'X-Rucio-Auth-Token': self.auth_token, 'X-Rucio-VO': self.vo,
-               'Connection': 'Keep-Alive', 'User-Agent': self.user_agent,
-               'X-Rucio-Script': self.script_id}
+        hds = {
+            HEADER_RUCIO_AUTH_TOKEN: self.auth_token,
+            HEADER_RUCIO_VO: self.vo,
+            HEADER_CONNECTION: 'Keep-Alive',
+            HEADER_USER_AGENT: self.user_agent,
+            HEADER_RUCIO_SCRIPT: self.script_id
+        }
 
         if self.account is not None:
-            hds['X-Rucio-Account'] = self.account
+            hds[HEADER_RUCIO_ACCOUNT] = self.account
 
         if headers is not None:
             hds.update(headers)
@@ -577,7 +597,7 @@ class BaseClient:
 
         self.logger.debug("HTTP request: %s %s" % (method.value, url))
         for h, v in hds.items():
-            if h == 'X-Rucio-Auth-Token':
+            if h == HEADER_RUCIO_AUTH_TOKEN:
                 v = "[hidden]"
             self.logger.debug("HTTP header:  %s: %s" % (h, v))
         if method != HTTPMethod.GET and data:
@@ -623,7 +643,7 @@ class BaseClient:
             if result is not None and result.status_code == codes.unauthorized and not get_token:  # pylint: disable-msg=E1101
                 self.session = Session()
                 self.__get_token()
-                hds['X-Rucio-Auth-Token'] = self.auth_token
+                hds[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
             else:
                 break
 
@@ -698,19 +718,18 @@ class BaseClient:
         request_refresh_url = build_url(self.auth_host, path='auth/oidc_refresh')
         refresh_result = self._send_request(request_refresh_url, method=HTTPMethod.GET, get_token=True)
         if refresh_result.status_code == codes.ok:
-            if 'X-Rucio-Auth-Token-Expires' not in refresh_result.headers or \
-                    'X-Rucio-Auth-Token' not in refresh_result.headers:
+            if HEADER_RUCIO_AUTH_TOKEN_EXPIRES not in refresh_result.headers or HEADER_RUCIO_AUTH_TOKEN not in refresh_result.headers:
                 print("Rucio Server response does not contain the expected headers.")
                 return False
 
-            new_token = refresh_result.headers['X-Rucio-Auth-Token']
-            new_exp_epoch = refresh_result.headers['X-Rucio-Auth-Token-Expires']
+            new_token = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN]
+            new_exp_epoch = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN_EXPIRES]
             if new_token and new_exp_epoch:
                 self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
                 self.auth_token = new_token
                 self.token_exp_epoch = new_exp_epoch
                 self.__write_token()
-                self.headers['X-Rucio-Auth-Token'] = self.auth_token
+                self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
                 return True
 
             self.logger.debug("No new token was received, possibly invalid/expired token or no refresh token in Rucio DB")
@@ -761,12 +780,12 @@ class BaseClient:
         oidc_auth_res = self._send_request(request_auth_url, headers=headers, get_token=True)
         self.logger.debug("Response headers %s and text %s" % (str(oidc_auth_res.headers), str(oidc_auth_res.text)))
 
-        if 'X-Rucio-OIDC-Auth-URL' not in oidc_auth_res.headers:
+        if HEADER_RUCIO_OIDC_AUTH_URL not in oidc_auth_res.headers:
             print("Rucio Client did not succeed to get AuthN/Z URL from the Rucio Auth Server. \
                                    \nThis could be due to wrongly requested/configured scope, audience or issuer.")
             return None
 
-        return oidc_auth_res.headers['X-Rucio-OIDC-Auth-URL']
+        return oidc_auth_res.headers[HEADER_RUCIO_OIDC_AUTH_URL]
 
     def _build_oidc_request_headers(self) -> dict[str, str]:
         """
@@ -803,23 +822,22 @@ class BaseClient:
         Optional[Response]
             Response containing auth token if successful, None otherwise
         """
-        timeout = 180
         print("\nPlease use your internet browser, go to:")
         print("\n    " + auth_url + "    \n")
         print("and authenticate with your Identity Provider.")
-        print("Rucio Client will poll the auth server for %d minutes.", timeout // 60)
+        print("Rucio Client will poll the auth server for %d minutes.", OIDC_POLLING_TIMEOUT_SECONDS // 60)
         print("----------------------------------------------")
 
         headers = {'X-Rucio-Client-Fetch-Token': 'True'}
         start_time = time.time()
 
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < OIDC_POLLING_TIMEOUT_SECONDS:
             result = self._send_request(auth_url, headers=headers, get_token=True)
-            if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
+            if HEADER_RUCIO_AUTH_TOKEN in result.headers and result.status_code == codes.ok:
                 return result
-            time.sleep(2)
+            time.sleep(OIDC_POLLING_INTERVAL_SECONDS)
 
-        self.logger.error("OIDC polling timeout after %d seconds", timeout)
+        self.logger.error("OIDC polling timeout after %d seconds", OIDC_POLLING_TIMEOUT_SECONDS)
         return None
 
     def _handle_oidc_manual_code_flow(self, auth_url: str) -> Optional[Response]:
@@ -843,19 +861,18 @@ class BaseClient:
 
         headers = {'X-Rucio-Client-Fetch-Token': 'True'}
 
-        max_attempts = 3
-        for attempt in range(max_attempts):
+        for attempt in range(OIDC_MAX_CODE_ATTEMPTS):
             fetchcode = input()
             fetch_url = build_url(self.auth_host, path='auth/oidc_redirect', params=fetchcode)
             result = self._send_request(fetch_url, headers=headers, get_token=True)
 
-            if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
+            if HEADER_RUCIO_AUTH_TOKEN in result.headers and result.status_code == codes.ok:
                 return result
 
-            if attempt < max_attempts - 1:
+            if attempt < OIDC_MAX_CODE_ATTEMPTS - 1:
                 self.logger.warning("Auth server did not respond as expected. Please try again with the correct code.")
 
-        self.logger.error("Failed to authenticate after %d attempts", max_attempts)
+        self.logger.error("Failed to authenticate after %d attempts", OIDC_MAX_CODE_ATTEMPTS)
         return None
 
     def _handle_oidc_auto_flow(self, auth_url: str) -> Optional[Response]:
@@ -1090,8 +1107,8 @@ class BaseClient:
 
         result = None
         saml_auth_result = self._send_request(url, method=HTTPMethod.GET, get_token=True)
-        if saml_auth_result.headers['X-Rucio-Auth-Token']:
-            return saml_auth_result.headers['X-Rucio-Auth-Token']
+        if saml_auth_result.headers.get('X-Rucio-Auth-Token'):
+            self.auth_token = saml_auth_result.headers['X-Rucio-Auth-Token']
         saml_auth_url = saml_auth_result.headers['X-Rucio-SAML-Auth-URL']
         result = self._send_request(saml_auth_url, method=HTTPMethod.POST, data=userpass, verify=False)
         result = self._send_request(url, method=HTTPMethod.GET, get_token=True)
@@ -1145,7 +1162,7 @@ class BaseClient:
 
             if self.auth_token is not None:
                 self.__write_token()
-                self.headers['X-Rucio-Auth-Token'] = self.auth_token
+                self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
                 break
 
         if self.auth_token is None:
@@ -1162,7 +1179,7 @@ class BaseClient:
             token = wlcg_token_discovery()
             if token:
                 self.auth_token = token
-                self.headers['X-Rucio-Auth-Token'] = self.auth_token
+                self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
                 return True
 
         if not os.path.exists(self.token_file):
@@ -1171,7 +1188,7 @@ class BaseClient:
         try:
             with open(self.token_file, 'r') as token_file_handler:
                 self.auth_token = token_file_handler.readline()
-            self.headers['X-Rucio-Auth-Token'] = self.auth_token
+            self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
         except OSError as error:
             print("I/O error({0}): {1}".format(error.errno, error.strerror))
         except Exception:
