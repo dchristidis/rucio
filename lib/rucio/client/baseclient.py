@@ -732,79 +732,17 @@ class BaseClient:
 
         :returns: True if the token was successfully received. False otherwise.
         """
-        oidc_scope = str(self.creds['oidc_scope'])
-        headers = {}
-        if self.creds['oidc_auto']:
-            userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
-
-        result = None
         auth_url = self._request_oidc_auth_url()
         if not auth_url:
             return False
 
         if not self.creds['oidc_auto']:
-            print("\nPlease use your internet browser, go to:")
-            print("\n    " + auth_url + "    \n")
-            print("and authenticate with your Identity Provider.")
-
-            headers['X-Rucio-Client-Fetch-Token'] = 'True'
             if self.creds['oidc_polling']:
-                timeout = 180
-                start = time.time()
-                print("In the next 3 minutes, Rucio Client will be polling \
-                                           \nthe Rucio authentication server for a token.")
-                print("----------------------------------------------")
-                while time.time() - start < timeout:
-                    result = self._send_request(auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
-                    if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
-                        break
-                    time.sleep(2)
+                result = self._handle_oidc_polling_flow(auth_url)
             else:
-                print("Copy paste the code from the browser to the terminal and press enter:")
-                count = 0
-                while count < 3:
-                    fetchcode = input()
-                    fetch_url = build_url(self.auth_host, path='auth/oidc_redirect', params=fetchcode)
-                    result = self._send_request(fetch_url, method=HTTPMethod.GET, headers=headers, get_token=True)
-                    if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
-                        break
-                    else:
-                        print("The Rucio Auth Server did not respond as expected. Please, "
-                              + "try again and make sure you typed the correct code.")
-                        count += 1
-
+                result = self._handle_oidc_manual_code_flow(auth_url)
         else:
-            print("\nAccording to the OAuth2/OIDC standard you should NOT be sharing \n"
-                  + "your password with any 3rd party application, therefore, \n"
-                  + "we strongly discourage you from following this --oidc-auto approach.")
-            print("-------------------------------------------------------------------------")
-            auth_res = self._send_request(auth_url, method=HTTPMethod.GET, get_token=True)
-            # getting the login URL and logging in the user
-            login_url = auth_res.url
-            start = time.time()
-            result = self._send_request(login_url, method=HTTPMethod.POST, data=userpass)
-
-            # if the Rucio OIDC Client configuration does not match the one registered at the Identity Provider
-            # the user will get an OAuth error
-            if 'OAuth Error' in result.text:
-                self.logger.error('Identity Provider does not allow to proceed. Could be due \
-                           \nto misconfigured redirection server name of the Rucio OIDC Client.')
-                return False
-            # In case Rucio Client is not authorized to request information about this user yet,
-            # it will automatically authorize itself on behalf of the user.
-            if result.url == auth_url:
-                form_data = {}
-                for scope_item in oidc_scope.split():
-                    form_data["scope_" + scope_item] = scope_item
-                default_data = {"remember": "until-revoked",
-                                "user_oauth_approval": True,
-                                "authorize": "Authorize"}
-                form_data.update(default_data)
-                print('Automatically authorising request of the following info on behalf of user: %s', str(form_data))
-                self.logger.warning('Automatically authorising request of the following info on behalf of user: %s',
-                                    str(form_data))
-                # authorizing info request on behalf of the user until he/she revokes this authorization !
-                result = self._send_request(result.url, method=HTTPMethod.POST, data=form_data)
+            result = self._handle_oidc_auto_flow(auth_url)
 
         if not result:
             self.logger.error('Cannot retrieve authentication token!')
@@ -872,6 +810,123 @@ class BaseClient:
             headers['X-Rucio-Client-Authorize-Issuer'] = str(self.creds['oidc_issuer'])
 
         return headers
+
+    def _handle_oidc_polling_flow(self, auth_url: str) -> Optional[Response]:
+        """
+        Handle OIDC authentication with polling flow.
+
+        Parameters
+        ----------
+        auth_url :
+            Authorization URL for authentication
+
+        Returns
+        -------
+        Optional[Response]
+            Response containing auth token if successful, None otherwise
+        """
+        print("\nPlease use your internet browser, go to:")
+        print("\n    " + auth_url + "    \n")
+        print("and authenticate with your Identity Provider.")
+
+        headers = {'X-Rucio-Client-Fetch-Token': 'True'}
+        timeout = 180
+        start = time.time()
+
+        print("In the next 3 minutes, Rucio Client will be polling \
+                                   \nthe Rucio authentication server for a token.")
+        print("----------------------------------------------")
+
+        while time.time() - start < timeout:
+            result = self._send_request(auth_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+            if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
+                break
+            time.sleep(2)
+
+        return result
+
+    def _handle_oidc_manual_code_flow(self, auth_url: str) -> Optional[Response]:
+        """
+        Handle OIDC authentication with manual code entry flow.
+
+        Parameters
+        ----------
+        auth_url :
+            Authorization URL for authentication
+
+        Returns
+        -------
+        Optional[Response]
+            Response containing auth token if successful, None otherwise
+        """
+        print("\nPlease use your internet browser, go to:")
+        print("\n    " + auth_url + "    \n")
+        print("and authenticate with your Identity Provider.")
+
+        headers = {'X-Rucio-Client-Fetch-Token': 'True'}
+
+        print("Copy paste the code from the browser to the terminal and press enter:")
+
+        count = 0
+        while count < 3:
+            fetchcode = input()
+            fetch_url = build_url(self.auth_host, path='auth/oidc_redirect', params=fetchcode)
+            result = self._send_request(fetch_url, method=HTTPMethod.GET, headers=headers, get_token=True)
+
+            if 'X-Rucio-Auth-Token' in result.headers and result.status_code == codes.ok:
+                break
+            else:
+                print("The Rucio Auth Server did not respond as expected. Please, "
+                      + "try again and make sure you typed the correct code.")
+                count += 1
+
+        return result
+
+    def _handle_oidc_auto_flow(self, auth_url: str) -> Optional[Response]:
+        """
+        Handle automatic OIDC authentication flow (discouraged).
+
+        Parameters
+        ----------
+        auth_url :
+            Authorization URL for authentication
+
+        Returns
+        -------
+        Optional[Response]
+            Response containing auth token if successful, None otherwise
+        """
+        print("\nAccording to the OAuth2/OIDC standard you should NOT be sharing \n"
+              + "your password with any 3rd party application, therefore, \n"
+              + "we strongly discourage you from following this --oidc-auto approach.")
+        print("-------------------------------------------------------------------------")
+
+        oidc_scope = str(self.creds['oidc_scope'])
+        userpass = {'username': self.creds['oidc_username'], 'password': self.creds['oidc_password']}
+
+        auth_res = self._send_request(auth_url, method=HTTPMethod.GET, get_token=True)
+        login_url = auth_res.url
+        result = self._send_request(login_url, method=HTTPMethod.POST, data=userpass)
+
+        if 'OAuth Error' in result.text:
+            self.logger.error('Identity Provider does not allow to proceed. Could be due \
+                       \nto misconfigured redirection server name of the Rucio OIDC Client.')
+            return None
+
+        if result.url == auth_url:
+            form_data = {}
+            for scope_item in oidc_scope.split():
+                form_data["scope_" + scope_item] = scope_item
+            default_data = {"remember": "until-revoked",
+                            "user_oauth_approval": True,
+                            "authorize": "Authorize"}
+            form_data.update(default_data)
+            print('Automatically authorising request of the following info on behalf of user: %s', str(form_data))
+            self.logger.warning('Automatically authorising request of the following info on behalf of user: %s',
+                                str(form_data))
+            result = self._send_request(result.url, method=HTTPMethod.POST, data=form_data)
+
+        return result
 
     def __get_token_x509(self) -> bool:
         """
