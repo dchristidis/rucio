@@ -131,12 +131,68 @@ class BaseClient:
         """
 
         self.logger = logger
+        self._setup_session(user_agent)
+        self._configure_hosts(rucio_host, auth_host)
+        self._configure_account_and_vo(account, vo)
+
+        self.ca_cert = ca_cert
+        self.auth_token = ""
+        self.headers = {}
+        self.timeout = timeout
+        self.request_retries = self.REQUEST_RETRIES
+        self.token_exp_epoch = None
+
+        self._setup_oidc_config()
+
+        self.auth_type = self._get_auth_type(auth_type)
+        self.creds = self._get_creds(creds)
+
+        self._validate_and_configure_tls(ca_cert)
+
+        self._configure_request_retries()
+        self.auth_token_file_path, self.token_exp_epoch_file, self.token_file, self.token_path = self._get_auth_tokens()
+        self.__authenticate()
+
+    def _setup_session(self, user_agent: str) -> None:
+        """
+        Initialize HTTP session and user agent string.
+
+        Sets up the requests Session object and constructs the user agent string
+        from the provided user agent and Rucio version. Also initializes the script
+        identifier from command line arguments.
+
+        Parameters
+        ----------
+        user_agent :
+            Base user agent string (e.g. 'rucio-clients')
+        """
         self.session = Session()
         self.user_agent = "%s/%s" % (user_agent, version.version_string())  # e.g. "rucio-clients/0.2.13"
         sys.argv[0] = sys.argv[0].split('/')[-1]
         self.script_id = '::'.join(sys.argv[0:2])
         if self.script_id == '':  # Python interpreter used
             self.script_id = 'python'
+
+    def _configure_hosts(self, rucio_host: Optional[str], auth_host: Optional[str]) -> None:
+        """
+        Configure and validate Rucio server and authentication server hosts.
+
+        Sets the main Rucio host, authentication host, and trace host. If hosts are not
+        provided, they are read from the configuration file. Falls back to using rucio_host
+        as trace_host if no separate trace host is configured.
+
+        Parameters
+        ----------
+        rucio_host :
+            Rucio server address, if None reads from config
+        auth_host :
+            Authentication server address, if None reads from config
+
+        Raises
+        ------
+        MissingClientParameter
+            If required host configuration cannot be found
+        """
         try:
             if rucio_host is not None:
                 self.host = rucio_host
@@ -160,51 +216,25 @@ class BaseClient:
             self.logger.debug('No trace_host passed. Using rucio_host instead')
 
         self.list_hosts = [self.host]
+
+    def _configure_account_and_vo(self, account: Optional[str], vo: Optional[str]) -> None:
+        """
+        Configure account and Virtual Organization with environment and config fallbacks.
+
+        Tries to determine the account and VO in the following order:
+        1. Provided parameter
+        2. Environment variable (RUCIO_ACCOUNT, RUCIO_VO)
+        3. Configuration file
+        4. Default value (for VO only, defaults to DEFAULT_VO)
+
+        Parameters
+        ----------
+        account :
+            Rucio account name
+        vo :
+            Virtual Organization name
+        """
         self.account = account
-        self.ca_cert = ca_cert
-        self.auth_token = ""
-        self.headers = {}
-        self.timeout = timeout
-        self.request_retries = self.REQUEST_RETRIES
-        self.token_exp_epoch = None
-        self.auth_oidc_refresh_active = config_get_bool('client', 'auth_oidc_refresh_active', False, False)
-
-        # defining how many minutes before token expires, oidc refresh (if active) should start
-        self.auth_oidc_refresh_before_exp = config_get_int('client', 'auth_oidc_refresh_before_exp', False, 20)
-
-        self.auth_type = self._get_auth_type(auth_type)
-        self.creds = self._get_creds(creds)
-
-        rucio_scheme = urlparse(self.host).scheme
-        auth_scheme = urlparse(self.auth_host).scheme
-
-        rucio_scheme_allowed = ['http', 'https']
-        auth_scheme_allowed = ['http', 'https']
-
-        if not rucio_scheme:
-            raise ClientProtocolNotFound(host=self.host, protocols_allowed=rucio_scheme_allowed)
-        elif rucio_scheme not in rucio_scheme_allowed:
-            raise ClientProtocolNotSupported(host=self.host, protocol=rucio_scheme, protocols_allowed=rucio_scheme_allowed)
-
-        if not auth_scheme:
-            raise ClientProtocolNotFound(host=self.auth_host, protocols_allowed=auth_scheme_allowed)
-        elif auth_scheme not in auth_scheme_allowed:
-            raise ClientProtocolNotSupported(host=self.auth_host, protocol=auth_scheme, protocols_allowed=auth_scheme_allowed)
-
-        if (rucio_scheme == 'https' or auth_scheme == 'https') and ca_cert is None:
-            self.logger.debug('HTTPS is required, but no ca_cert was passed. Trying to get it from X509_CERT_DIR.')
-            self.ca_cert = os.environ.get('X509_CERT_DIR', None)
-            if self.ca_cert is None:
-                self.logger.debug('HTTPS is required, but no ca_cert was passed and X509_CERT_DIR is not defined. Trying to get it from the config file.')
-                try:
-                    self.ca_cert = _expand_path(config_get('client', 'ca_cert'))
-                except (NoOptionError, NoSectionError):
-                    self.logger.debug('No ca_cert found in configuration. Falling back to Mozilla default CA bundle (certifi).')
-                    self.ca_cert = True
-                except ConfigNotFound:
-                    self.logger.debug('No configuration found. Falling back to Mozilla default CA bundle (certifi).')
-                    self.ca_cert = True
-
         if account is None:
             self.logger.debug('No account passed. Trying to get it from the RUCIO_ACCOUNT environment variable or the config file.')
             try:
@@ -232,9 +262,71 @@ class BaseClient:
                     self.logger.debug('No configuration found. Using default VO.')
                     self.vo = DEFAULT_VO
 
-        self.auth_token_file_path, self.token_exp_epoch_file, self.token_file, self.token_path = self._get_auth_tokens()
-        self.__authenticate()
+    def _setup_oidc_config(self) -> None:
+        """
+        Setup OIDC-specific configuration parameters.
 
+        Reads OIDC refresh configuration from the config file, including whether
+        OIDC token refresh is active and how many minutes before expiration the
+        refresh should begin.
+        """
+        self.auth_oidc_refresh_active = config_get_bool('client', 'auth_oidc_refresh_active', False, False)
+        self.auth_oidc_refresh_before_exp = config_get_int('client', 'auth_oidc_refresh_before_exp', False, 20)
+
+    def _validate_and_configure_tls(self, ca_cert: Optional[str] = None) -> None:
+        """
+        Validate URL schemes and configure TLS certificates.
+
+        Validates that both rucio_host and auth_host use allowed URL schemes (http/https).
+        If HTTPS is used and no CA certificate is provided, attempts to discover it from:
+        1. X509_CERT_DIR environment variable
+        2. Configuration file
+        3. Falls back to certifi's Mozilla CA bundle
+
+        Raises
+        ------
+        ClientProtocolNotFound
+            If URL has no scheme
+        ClientProtocolNotSupported
+            If URL scheme is not in allowed list
+        """
+        rucio_scheme = urlparse(self.host).scheme
+        auth_scheme = urlparse(self.auth_host).scheme
+        rucio_scheme_allowed = ['http', 'https']
+        auth_scheme_allowed = ['http', 'https']
+
+        if not rucio_scheme:
+            raise ClientProtocolNotFound(host=self.host, protocols_allowed=rucio_scheme_allowed)
+        elif rucio_scheme not in rucio_scheme_allowed:
+            raise ClientProtocolNotSupported(host=self.host, protocol=rucio_scheme, protocols_allowed=rucio_scheme_allowed)
+
+        if not auth_scheme:
+            raise ClientProtocolNotFound(host=self.auth_host, protocols_allowed=auth_scheme_allowed)
+        elif auth_scheme not in auth_scheme_allowed:
+            raise ClientProtocolNotSupported(host=self.auth_host, protocol=auth_scheme, protocols_allowed=auth_scheme_allowed)
+
+        if (rucio_scheme == 'https' or auth_scheme == 'https') and ca_cert is None:
+            self.logger.debug('HTTPS is required, but no ca_cert was passed. Trying to get it from X509_CERT_DIR.')
+            self.ca_cert = os.environ.get('X509_CERT_DIR', None)
+            if self.ca_cert is None:
+                self.logger.debug('HTTPS is required, but no ca_cert was passed and X509_CERT_DIR is not defined. Trying to get it from the config file.')
+                try:
+                    self.ca_cert = _expand_path(config_get('client', 'ca_cert'))
+                except (NoOptionError, NoSectionError):
+                    self.logger.debug('No ca_cert found in configuration. Falling back to Mozilla default CA bundle (certifi).')
+                    self.ca_cert = True
+                except ConfigNotFound:
+                    self.logger.debug('No configuration found. Falling back to Mozilla default CA bundle (certifi).')
+                    self.ca_cert = True
+
+    def _configure_request_retries(self) -> None:
+        """
+        Configure request retry count from configuration file.
+
+        Attempts to read the request_retries setting from the config file.
+        Falls back to the default REQUEST_RETRIES value if not configured
+        or if the value is invalid.
+        """
         try:
             self.request_retries = config_get_int('client', 'request_retries')
         except (NoOptionError, ConfigNotFound):
