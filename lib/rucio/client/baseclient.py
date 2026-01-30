@@ -23,6 +23,7 @@ import os
 import secrets
 import sys
 import time
+from collections.abc import Mapping  # noqa: TC003 - Used in runtime function signatures, not just type annotations
 from configparser import NoOptionError, NoSectionError
 from os import environ, fdopen, geteuid, makedirs
 from shutil import move
@@ -116,7 +117,7 @@ class BaseClient:
         auth_type: Optional[str] = None,
         creds: Optional[dict[str, Any]] = None,
         timeout: Optional[int] = 600,
-        user_agent: Optional[str] = 'rucio-clients',
+        user_agent: str = 'rucio-clients',
         vo: Optional[str] = None,
         logger: 'Logger' = LOG
     ) -> None:
@@ -154,15 +155,15 @@ class BaseClient:
 
         self.ca_cert = ca_cert
         self.auth_token = ""
-        self.headers = {}
+        self.headers: dict[str, str] = {}
         self.timeout = timeout
         self.request_retries = self.REQUEST_RETRIES
-        self.token_exp_epoch = None
+        self.token_exp_epoch: Optional[int] = None
 
         self._setup_oidc_config()
 
         self.auth_type = self._get_auth_type(auth_type)
-        self.creds = self._get_creds(creds)
+        self.creds: dict[str, Any] = self._get_creds(creds)
 
         self._validate_and_configure_tls()
 
@@ -499,9 +500,9 @@ class BaseClient:
 
     def _get_exception(
         self,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         status_code: Optional[int] = None,
-        data=None
+        data: Any = None
     ) -> tuple[type[exception.RucioException], str]:
         """
         Parse error string from server and transform into corresponding rucio exception.
@@ -568,7 +569,7 @@ class BaseClient:
             if response.text:
                 yield response.text
 
-    def _reduce_data(self, data, maxlen: int = 132) -> str:
+    def _reduce_data(self, data: Any, maxlen: int = 132) -> str:
         """Reduce data to maximum length for logging."""
         if isinstance(data, dict):
             data = json.dumps(data)
@@ -594,17 +595,17 @@ class BaseClient:
 
     def _send_request(
         self,
-        url,
-        method,
-        headers=None,
-        data=None,
-        params=None,
-        stream=False,
-        get_token=False,
-        cert=None,
-        auth=None,
-        verify=None
-    ):
+        url: str,
+        method: HTTPMethod = HTTPMethod.GET,
+        headers: Optional[dict[str, str]] = None,
+        data: Any = None,
+        params: Optional[dict[str, Any]] = None,
+        stream: bool = False,
+        get_token: bool = False,
+        cert: Any = None,
+        auth: Any = None,
+        verify: Any = None
+    ) -> Response:
         """
         Send requests to the rucio server with token refresh on unauthorized.
 
@@ -801,7 +802,7 @@ class BaseClient:
             if new_token and new_exp_epoch:
                 self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
                 self.auth_token = new_token
-                self.token_exp_epoch = new_exp_epoch
+                self.token_exp_epoch = int(new_exp_epoch)
                 self.__write_token()
                 self.headers[HEADER_RUCIO_AUTH_TOKEN] = self.auth_token
                 return True
@@ -1113,8 +1114,7 @@ class BaseClient:
         bool
             True if token successfully received, False otherwise
         """
-        headers = {}
-
+        headers: dict[str, str] = {}
         private_key_path = self.creds['ssh_private_key']
         if not os.path.exists(private_key_path):
             self.logger.error('given private key (%s) doesn\'t exist' % private_key_path)
