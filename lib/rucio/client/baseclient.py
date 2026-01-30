@@ -100,7 +100,6 @@ def _expand_path(path: str) -> str:
 
 
 class BaseClient:
-
     """Main client class for accessing Rucio resources. Handles the authentication."""
 
     AUTH_RETRIES, REQUEST_RETRIES = 2, 3
@@ -108,17 +107,19 @@ class BaseClient:
     TOKEN_PREFIX = 'auth_token_'  # noqa: S105
     TOKEN_EXP_PREFIX = 'auth_token_exp_'  # noqa: S105
 
-    def __init__(self,
-                 rucio_host: Optional[str] = None,
-                 auth_host: Optional[str] = None,
-                 account: Optional[str] = None,
-                 ca_cert: Optional[str] = None,
-                 auth_type: Optional[str] = None,
-                 creds: Optional[dict[str, Any]] = None,
-                 timeout: Optional[int] = 600,
-                 user_agent: Optional[str] = 'rucio-clients',
-                 vo: Optional[str] = None,
-                 logger: 'Logger' = LOG) -> None:
+    def __init__(
+        self,
+        rucio_host: Optional[str] = None,
+        auth_host: Optional[str] = None,
+        account: Optional[str] = None,
+        ca_cert: Optional[str] = None,
+        auth_type: Optional[str] = None,
+        creds: Optional[dict[str, Any]] = None,
+        timeout: Optional[int] = 600,
+        user_agent: Optional[str] = 'rucio-clients',
+        vo: Optional[str] = None,
+        logger: 'Logger' = LOG
+    ) -> None:
         """
         Constructor of the BaseClient.
 
@@ -496,7 +497,12 @@ class BaseClient:
         if not os.path.isfile(creds["ssh_private_key"]):
             raise CannotAuthenticate(f'Provided ssh private key {creds["ssh_private_key"]!r} does not exist')
 
-    def _get_exception(self, headers: dict[str, str], status_code: Optional[int] = None, data=None) -> tuple[type[exception.RucioException], str]:
+    def _get_exception(
+        self,
+        headers: dict[str, str],
+        status_code: Optional[int] = None,
+        data=None
+    ) -> tuple[type[exception.RucioException], str]:
         """
         Parse error string from server and transform into corresponding rucio exception.
 
@@ -586,8 +592,19 @@ class BaseClient:
         self.logger.warning("Waiting {}s due to reason: {} ".format(sleep_time, reason))
         time.sleep(sleep_time)
 
-    def _send_request(self, url, method, headers=None, data=None, params=None, stream=False, get_token=False,
-                      cert=None, auth=None, verify=None):
+    def _send_request(
+        self,
+        url,
+        method,
+        headers=None,
+        data=None,
+        params=None,
+        stream=False,
+        get_token=False,
+        cert=None,
+        auth=None,
+        verify=None
+    ):
         """
         Send requests to the rucio server with token refresh on unauthorized.
 
@@ -710,9 +727,10 @@ class BaseClient:
         CannotAuthenticate
             If authentication fails
         """
-
-        headers = {'X-Rucio-Username': self.creds['username'],
-                   'X-Rucio-Password': self.creds['password']}
+        headers = {
+            'X-Rucio-Username': self.creds['username'],
+            'X-Rucio-Password': self.creds['password']
+        }
 
         url = build_url(self.auth_host, path='auth/userpass')
 
@@ -731,10 +749,12 @@ class BaseClient:
             self.logger.error('Cannot retrieve authentication token!')
             return False
 
-        if result.status_code != codes.ok:  # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
@@ -749,9 +769,9 @@ class BaseClient:
         bool
             True if token successfully refreshed, False otherwise
         """
-
         if not self.auth_oidc_refresh_active:
             return False
+
         if os.path.exists(self.token_exp_epoch_file):
             with open(self.token_exp_epoch_file, 'r') as token_epoch_file:
                 try:
@@ -777,6 +797,7 @@ class BaseClient:
 
             new_token = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN]
             new_exp_epoch = refresh_result.headers[HEADER_RUCIO_AUTH_TOKEN_EXPIRES]
+
             if new_token and new_exp_epoch:
                 self.logger.debug("Saving token %s and expiration epoch %s to files" % (str(new_token), str(new_exp_epoch)))
                 self.auth_token = new_token
@@ -856,10 +877,12 @@ class BaseClient:
         dict
             Dictionary of HTTP headers for OIDC request
         """
-        headers = {'X-Rucio-Client-Authorize-Auto': str(self.creds['oidc_auto']),
-                   'X-Rucio-Client-Authorize-Polling': str(self.creds['oidc_polling']),
-                   'X-Rucio-Client-Authorize-Scope': str(self.creds['oidc_scope']),
-                   'X-Rucio-Client-Authorize-Refresh-Lifetime': str(self.creds['oidc_refresh_lifetime'])}
+        headers = {
+            'X-Rucio-Client-Authorize-Auto': str(self.creds['oidc_auto']),
+            'X-Rucio-Client-Authorize-Polling': str(self.creds['oidc_polling']),
+            'X-Rucio-Client-Authorize-Scope': str(self.creds['oidc_scope']),
+            'X-Rucio-Client-Authorize-Refresh-Lifetime': str(self.creds['oidc_refresh_lifetime'])
+        }
 
         if self.creds['oidc_audience']:
             headers['X-Rucio-Client-Authorize-Audience'] = str(self.creds['oidc_audience'])
@@ -1011,10 +1034,12 @@ class BaseClient:
             self.logger.error('Cannot retrieve authentication token!')
             return False
 
-        if result.status_code != codes.ok:  # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
@@ -1068,10 +1093,12 @@ class BaseClient:
             self.logger.error('Internal error: Request for authentication token returned no result!')
             return False
 
-        if result.status_code != codes.ok:   # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
@@ -1104,10 +1131,12 @@ class BaseClient:
             self.logger.error('cannot get ssh_challenge_token')
             return False
 
-        if result.status_code != codes.ok:   # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.ssh_challenge_token = result.headers['x-rucio-ssh-challenge-token']
@@ -1127,10 +1156,12 @@ class BaseClient:
             self.logger.error('Cannot retrieve authentication token!')
             return False
 
-        if result.status_code != codes.ok:   # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
@@ -1156,10 +1187,12 @@ class BaseClient:
             self.logger.error('Cannot retrieve authentication token!')
             return False
 
-        if result.status_code != codes.ok:   # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['x-rucio-auth-token']
@@ -1189,10 +1222,12 @@ class BaseClient:
             self.logger.error('Cannot retrieve authentication token!')
             return False
 
-        if result.status_code != codes.ok:  # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
+        if result.status_code != codes.ok:
+            exc_cls, exc_msg = self._get_exception(
+                headers=result.headers,
+                status_code=result.status_code,
+                data=result.content
+            )
             raise exc_cls(exc_msg)
 
         self.auth_token = result.headers['X-Rucio-Auth-Token']
@@ -1247,7 +1282,6 @@ class BaseClient:
         bool
             True if token could be read, False if no file exists
         """
-
         if self.auth_type == "oidc":
             token = wlcg_token_discovery()
             if token:
