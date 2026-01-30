@@ -147,7 +147,7 @@ class BaseClient:
         self.auth_type = self._get_auth_type(auth_type)
         self.creds = self._get_creds(creds)
 
-        self._validate_and_configure_tls(ca_cert)
+        self._validate_and_configure_tls()
 
         self._configure_request_retries()
         self.auth_token_file_path, self.token_exp_epoch_file, self.token_file, self.token_path = self._get_auth_tokens()
@@ -273,7 +273,7 @@ class BaseClient:
         self.auth_oidc_refresh_active = config_get_bool('client', 'auth_oidc_refresh_active', False, False)
         self.auth_oidc_refresh_before_exp = config_get_int('client', 'auth_oidc_refresh_before_exp', False, 20)
 
-    def _validate_and_configure_tls(self, ca_cert: Optional[str] = None) -> None:
+    def _validate_and_configure_tls(self) -> None:
         """
         Validate URL schemes and configure TLS certificates.
 
@@ -305,19 +305,35 @@ class BaseClient:
         elif auth_scheme not in auth_scheme_allowed:
             raise ClientProtocolNotSupported(host=self.auth_host, protocol=auth_scheme, protocols_allowed=auth_scheme_allowed)
 
-        if (rucio_scheme == 'https' or auth_scheme == 'https') and ca_cert is None:
-            self.logger.debug('HTTPS is required, but no ca_cert was passed. Trying to get it from X509_CERT_DIR.')
-            self.ca_cert = os.environ.get('X509_CERT_DIR', None)
-            if self.ca_cert is None:
-                self.logger.debug('HTTPS is required, but no ca_cert was passed and X509_CERT_DIR is not defined. Trying to get it from the config file.')
-                try:
-                    self.ca_cert = _expand_path(config_get('client', 'ca_cert'))
-                except (NoOptionError, NoSectionError):
-                    self.logger.debug('No ca_cert found in configuration. Falling back to Mozilla default CA bundle (certifi).')
-                    self.ca_cert = True
-                except ConfigNotFound:
-                    self.logger.debug('No configuration found. Falling back to Mozilla default CA bundle (certifi).')
-                    self.ca_cert = True
+        if (rucio_scheme == 'https' or auth_scheme == 'https') and self.ca_cert is None:
+            self.ca_cert = self._discover_ca_cert()
+
+    def _discover_ca_cert(self) -> Any:
+        """
+        Discover CA certificate from environment, config, or use default.
+
+        Attempts to find a CA certificate in the following order:
+        1. X509_CERT_DIR environment variable
+        2. client.ca_cert configuration value
+        3. Mozilla CA bundle (certifi) as fallback
+
+        Returns
+        -------
+
+            Path to CA certificate file, directory, or True for default certifi bundle
+        """
+        self.logger.debug('HTTPS is required, but no ca_cert was passed. Trying to get it from X509_CERT_DIR.')
+        ca_cert = os.environ.get('X509_CERT_DIR')
+
+        if ca_cert is None:
+            self.logger.debug('X509_CERT_DIR not defined. Trying config file.')
+            try:
+                ca_cert = _expand_path(config_get('client', 'ca_cert'))
+            except (NoOptionError, NoSectionError, ConfigNotFound):
+                self.logger.debug('No ca_cert found in configuration. Falling back to Mozilla default CA bundle (certifi).')
+                ca_cert = True
+
+        return ca_cert
 
     def _configure_request_retries(self) -> None:
         """
