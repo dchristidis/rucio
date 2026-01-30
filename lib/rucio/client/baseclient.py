@@ -290,23 +290,39 @@ class BaseClient:
         ClientProtocolNotSupported
             If URL scheme is not in allowed list
         """
-        rucio_scheme = urlparse(self.host).scheme
-        auth_scheme = urlparse(self.auth_host).scheme
-        rucio_scheme_allowed = ['http', 'https']
-        auth_scheme_allowed = ['http', 'https']
-
-        if not rucio_scheme:
-            raise ClientProtocolNotFound(host=self.host, protocols_allowed=rucio_scheme_allowed)
-        elif rucio_scheme not in rucio_scheme_allowed:
-            raise ClientProtocolNotSupported(host=self.host, protocol=rucio_scheme, protocols_allowed=rucio_scheme_allowed)
-
-        if not auth_scheme:
-            raise ClientProtocolNotFound(host=self.auth_host, protocols_allowed=auth_scheme_allowed)
-        elif auth_scheme not in auth_scheme_allowed:
-            raise ClientProtocolNotSupported(host=self.auth_host, protocol=auth_scheme, protocols_allowed=auth_scheme_allowed)
-
+        rucio_scheme = self._get_valid_url_scheme(self.host, ['http', 'https'])
+        auth_scheme = self._get_valid_url_scheme(self.auth_host, ['http', 'https'])
         if (rucio_scheme == 'https' or auth_scheme == 'https') and self.ca_cert is None:
             self.ca_cert = self._discover_ca_cert()
+
+    def _get_valid_url_scheme(self, host: str, allowed_schemes: list[str]) -> str:
+        """
+        Validate and return the URL scheme.
+        Parameters
+        ----------
+        host :
+            URL to validate
+        allowed_schemes :
+            List of allowed URL schemes
+
+        Returns
+        -------
+        str
+            The validated URL scheme
+
+        Raises
+        ------
+        ClientProtocolNotFound
+            If URL has no scheme
+        ClientProtocolNotSupported
+            If URL scheme is not in allowed list
+        """
+        scheme = urlparse(host).scheme
+        if not scheme:
+            raise ClientProtocolNotFound(host=host, protocols_allowed=allowed_schemes)
+        if scheme not in allowed_schemes:
+            raise ClientProtocolNotSupported(host=host, protocol=scheme, protocols_allowed=allowed_schemes)
+        return scheme
 
     def _discover_ca_cert(self) -> Any:
         """
