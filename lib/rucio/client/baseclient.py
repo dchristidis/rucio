@@ -431,33 +431,29 @@ class BaseClient:
     def _populate_x509_creds(self, creds: dict[str, Any]) -> None:
         """Populate X509 credentials from config."""
         if 'client_cert' not in creds or creds['client_cert'] is None:
-            if "RUCIO_CLIENT_CERT" in environ:
-                creds['client_cert'] = environ["RUCIO_CLIENT_CERT"]
-            else:
-                creds['client_cert'] = config_get('client', 'client_cert')
+            creds['client_cert'] = environ.get("RUCIO_CLIENT_CERT") or config_get('client', 'client_cert')
 
         creds['client_cert'] = _expand_path(creds['client_cert'])
-
         if not os.path.exists(creds['client_cert']):
-            raise MissingClientParameter('X.509 client certificate not found: %r' % creds['client_cert'])
+            raise MissingClientParameter(f"X.509 client certificate not found: {creds['client_cert']!r}")
 
         if 'client_key' not in creds or creds['client_key'] is None:
-            if "RUCIO_CLIENT_KEY" in environ:
-                creds['client_key'] = environ["RUCIO_CLIENT_KEY"]
-            else:
-                creds['client_key'] = config_get('client', 'client_key')
+            creds['client_key'] = environ.get("RUCIO_CLIENT_KEY") or config_get('client', 'client_key')
 
         creds['client_key'] = _expand_path(creds['client_key'])
         if not os.path.exists(creds['client_key']):
-            raise MissingClientParameter('X.509 client key not found: %r' % creds['client_key'])
+            raise MissingClientParameter(f"X.509 client key not found: {creds['client_key']!r}")
 
         perms = oct(os.stat(creds['client_key']).st_mode)[-3:]
         if perms not in ['400', '600']:
-            raise CannotAuthenticate('X.509 authentication selected, but private key (%s) permissions are liberal (required: 400 or 600, found: %s)' % (creds['client_key'], perms))
+            raise CannotAuthenticate(
+                f"X.509 authentication selected, but private key ({creds['client_key']}) "
+                f"permissions are liberal (required: 400 or 600, found: {perms})"
+            )
 
     def _populate_x509_proxy_creds(self, creds: dict[str, Any]) -> None:
         """Populate X509 proxy credentials from config."""
-        gsi_proxy_path = '/tmp/x509up_u%d' % geteuid()
+        gsi_proxy_path = f'/tmp/x509up_u{geteuid()}'
         if 'client_proxy' not in creds or creds['client_proxy'] is None:
             if 'RUCIO_CLIENT_PROXY' in environ:
                 creds['client_proxy'] = environ['RUCIO_CLIENT_PROXY']
@@ -469,11 +465,10 @@ class BaseClient:
                 creds['client_proxy'] = gsi_proxy_path
 
         creds['client_proxy'] = _expand_path(creds['client_proxy'])
-
         if not os.path.isfile(creds['client_proxy']):
             raise MissingClientParameter(
-                'Cannot find a valid X509 proxy; checked $RUCIO_CLIENT_PROXY, $X509_USER_PROXY'
-                'client/client_x509_proxy config and default path: %r' % gsi_proxy_path
+                f'Cannot find a valid X509 proxy; checked $RUCIO_CLIENT_PROXY, $X509_USER_PROXY '
+                f'client/client_x509_proxy config and default path: {gsi_proxy_path!r}'
             )
 
     def _populate_ssh_creds(self, creds: dict[str, Any]) -> None:
@@ -483,7 +478,7 @@ class BaseClient:
 
         creds['ssh_private_key'] = _expand_path(creds['ssh_private_key'])
         if not os.path.isfile(creds["ssh_private_key"]):
-            raise CannotAuthenticate('Provided ssh private key %r does not exist' % creds['ssh_private_key'])
+            raise CannotAuthenticate(f'Provided ssh private key {creds["ssh_private_key"]!r} does not exist')
 
     def _get_exception(self, headers: dict[str, str], status_code: Optional[int] = None, data=None) -> tuple[type[exception.RucioException], str]:
         """
