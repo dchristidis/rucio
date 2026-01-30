@@ -743,28 +743,7 @@ class BaseClient:
         else:
             result = self._handle_oidc_manual_code_flow(auth_url)
 
-        if not result:
-            self.logger.error('Cannot retrieve authentication token!')
-            return False
-
-        if result.status_code != codes.ok:  # pylint: disable-msg=E1101
-            exc_cls, exc_msg = self._get_exception(headers=result.headers,
-                                                   status_code=result.status_code,
-                                                   data=result.content)
-            raise exc_cls(exc_msg)
-
-        self.auth_token = result.headers['x-rucio-auth-token']
-        if self.auth_oidc_refresh_active:
-            self.logger.debug("Resetting the token expiration epoch file content.")
-            # reset the token expiration epoch file content
-            # at new CLI OIDC authentication
-            self.token_exp_epoch = None
-            file_d, file_n = mkstemp(dir=self.token_path)
-            with fdopen(file_d, "w") as f_exp_epoch:
-                f_exp_epoch.write(str(self.token_exp_epoch))
-            move(file_n, self.token_exp_epoch_file)
-            self.__refresh_token_oidc()
-        return True
+        return self._finalize_oidc_token(result)
 
     def _request_oidc_auth_url(self) -> Optional[str]:
         """
@@ -938,6 +917,42 @@ class BaseClient:
 
         self.logger.warning('Auto-authorizing scope request: %s', form_data)
         return self._send_request(url, method=HTTPMethod.POST, data=form_data)
+
+    def _finalize_oidc_token(self, result: Optional[Response]) -> bool:
+        """
+        Extract and store OIDC auth token from response.
+
+        Parameters
+        ----------
+        result :
+            Response from OIDC authentication
+
+        Returns
+        -------
+        bool
+            True if token successfully extracted, False otherwise
+        """
+        if not result:
+            self.logger.error('Cannot retrieve authentication token!')
+            return False
+
+        if result.status_code != codes.ok:  # pylint: disable-msg=E1101
+            exc_cls, exc_msg = self._get_exception(headers=result.headers,
+                                                   status_code=result.status_code,
+                                                   data=result.content)
+            raise exc_cls(exc_msg)
+
+        self.auth_token = result.headers['x-rucio-auth-token']
+        if self.auth_oidc_refresh_active:
+            self.logger.debug("Resetting the token expiration epoch file content.")
+            self.token_exp_epoch = None
+            file_d, file_n = mkstemp(dir=self.token_path)
+            with fdopen(file_d, "w") as f_exp_epoch:
+                f_exp_epoch.write(str(self.token_exp_epoch))
+            move(file_n, self.token_exp_epoch_file)
+            self.__refresh_token_oidc()
+
+        return True
 
     def __get_token_x509(self) -> bool:
         """
